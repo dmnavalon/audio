@@ -1,222 +1,365 @@
-// La API key vive en el servidor (variable de entorno ASSEMBLYAI_API_KEY).
-// El front solo habla con /api/* — nunca con AssemblyAI directamente.
+// Polifonía — transcripción con identificación de hablantes.
+// API key vive en el servidor (env ASSEMBLYAI_API_KEY). El front solo habla con /api/*.
 
-// Referencia al XHR para poder abortar la subida
-let currentXhr = null;
+const els = {
+  input: document.getElementById('audioInput'),
+  drop: document.getElementById('uploadBox'),
+  langSelect: document.getElementById('languageSelect'),
+  speakersInput: document.getElementById('speakersInput'),
+  progressPanel: document.getElementById('progressPanel'),
+  progressLabel: document.getElementById('progressLabel'),
+  progressBar: document.getElementById('progressBar'),
+  cancelBtn: document.getElementById('cancelBtn'),
+  resultPanel: document.getElementById('resultPanel'),
+  resultFilename: document.getElementById('resultFilename'),
+  resultMeta: document.getElementById('resultMeta'),
+  utterances: document.getElementById('utterances'),
+  copyBtn: document.getElementById('copyBtn'),
+  downloadBtn: document.getElementById('downloadBtn'),
+  logs: document.getElementById('logs'),
+  toasts: document.getElementById('toasts'),
+};
 
-// Elementos del DOM
-const audioInput = document.getElementById("audioInput");
-const uploadBox = document.getElementById("uploadBox");
-const stopUploadBtn = document.getElementById("stopUploadBtn");
+const SPEAKER_VARS = [
+  '--speaker-1','--speaker-2','--speaker-3','--speaker-4','--speaker-5',
+  '--speaker-6','--speaker-7','--speaker-8','--speaker-9','--speaker-10',
+];
 
-// Listeners
-audioInput.addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (file) handleFile(file);
+const state = {
+  xhr: null,
+  transcriptId: null,
+  cancelled: false,
+  currentFile: null,
+  result: null,
+};
+
+['dragenter', 'dragover'].forEach(ev =>
+  els.drop.addEventListener(ev, e => {
+    e.preventDefault();
+    if (!els.drop.classList.contains('is-disabled')) {
+      els.drop.classList.add('is-dragging');
+    }
+  })
+);
+['dragleave', 'drop'].forEach(ev =>
+  els.drop.addEventListener(ev, e => {
+    e.preventDefault();
+    els.drop.classList.remove('is-dragging');
+  })
+);
+els.drop.addEventListener('drop', e => {
+  if (els.drop.classList.contains('is-disabled')) return;
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
 });
-
-// Para detener la subida
-stopUploadBtn.addEventListener("click", stopUpload);
-
-// DRAG & DROP
-uploadBox.addEventListener("dragenter", (e) => {
-  e.preventDefault();
-  uploadBox.classList.add("drag-over");
+els.drop.addEventListener('click', () => {
+  if (!els.drop.classList.contains('is-disabled')) els.input.click();
 });
-uploadBox.addEventListener("dragleave", (e) => {
-  e.preventDefault();
-  uploadBox.classList.remove("drag-over");
-});
-uploadBox.addEventListener("dragover", (e) => {
-  e.preventDefault();
-});
-uploadBox.addEventListener("drop", (e) => {
-  e.preventDefault();
-  uploadBox.classList.remove("drag-over");
-  if (e.dataTransfer.files.length) {
-    const file = e.dataTransfer.files[0];
-    handleFile(file);
+els.drop.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && !els.drop.classList.contains('is-disabled')) {
+    e.preventDefault();
+    els.input.click();
   }
 });
-
-// Clic en la caja: dispara el input "file"
-uploadBox.addEventListener("click", () => {
-  audioInput.click();
+els.input.addEventListener('change', e => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+  e.target.value = '';
 });
 
-// Procesar archivo
+els.cancelBtn.addEventListener('click', cancel);
+els.copyBtn.addEventListener('click', copyToClipboard);
+els.downloadBtn.addEventListener('click', downloadTxt);
+
 async function handleFile(file) {
-  clearLogs();
-  showLoading(true);
-  showStopButton(true);
+  state.cancelled = false;
+  state.currentFile = file;
+  state.result = null;
+  hideResult();
+  setDropDisabled(true);
+  showProgress(`Subiendo "${file.name}"…`, 0);
+  log(`Iniciando: ${file.name} (${formatBytes(file.size)})`);
 
   try {
-    logMessage("Iniciando subida...");
     const uploadUrl = await uploadFile(file);
+    if (state.cancelled) return;
+    log('Subida completa');
 
-    logMessage("Subida completada. URL: " + uploadUrl);
-    showStopButton(false);
+    updateProgress('Iniciando transcripción…', null);
+    const langValue = els.langSelect.value;
+    const speakers = Math.max(1, Math.min(10, +els.speakersInput.value || 2));
+    const id = await startTranscription(uploadUrl, langValue, speakers);
+    state.transcriptId = id;
+    if (state.cancelled) {
+      cancelRemote(id);
+      return;
+    }
+    log(`Transcripción iniciada: ${id}`);
 
-    const language = document.getElementById("languageSelect").value;
-    const speakers = document.getElementById("speakersInput").value;
+    updateProgress('Transcribiendo…', null);
+    const result = await waitForTranscript(id);
+    if (state.cancelled) return;
+    log('Transcripción completa');
 
-    updateStatus("Procesando audio...");
-    logMessage(`Iniciando transcripción: idioma=${language}, hablantes=${speakers}`);
-
-    const transcriptId = await startTranscription(uploadUrl, language, speakers);
-    logMessage("Transcripción iniciada. ID: " + transcriptId);
-
-    updateStatus("Transcribiendo...");
-    const result = await waitForTranscript(transcriptId);
-    logMessage("Transcripción finalizada con éxito.");
-
-    showResults(result.utterances);
-    autoSaveLocal(result.text);
-
-  } catch (error) {
-    alert(`Error: ${error.message}`);
-    logMessage("ERROR: " + error.message);
+    state.result = result;
+    renderResult(file, result);
+    toast('Transcripción lista', 'success');
+  } catch (err) {
+    if (state.cancelled) {
+      log('Operación cancelada');
+      return;
+    }
+    log(`ERROR: ${err.message}`);
+    toast(err.message || 'Algo salió mal', 'error');
   } finally {
-    showLoading(false);
-    showStopButton(false);
+    hideProgress();
+    setDropDisabled(false);
+    state.xhr = null;
+    state.transcriptId = null;
   }
 }
 
-// Subir archivo con XHR (progress y cancelación)
 function uploadFile(file) {
-  updateStatus("Subiendo archivo... (0%)");
-
   return new Promise((resolve, reject) => {
-    currentXhr = new XMLHttpRequest();
-    currentXhr.open("POST", "/api/upload", true);
-
-    currentXhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percent = (event.loaded / event.total) * 100;
-        updateStatus(`Subiendo archivo... (${percent.toFixed(2)}%)`);
+    const xhr = new XMLHttpRequest();
+    state.xhr = xhr;
+    xhr.open('POST', '/api/upload');
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) {
+        const pct = (e.loaded / e.total) * 100;
+        updateProgress(`Subiendo… ${pct.toFixed(0)}%`, pct);
       }
     };
-
-    currentXhr.onload = () => {
-      if (currentXhr.status === 200) {
-        const data = JSON.parse(currentXhr.responseText || "{}");
-        if (data.upload_url) {
-          resolve(data.upload_url);
-        } else {
-          logMessage("Error en respuesta: " + currentXhr.responseText);
-          reject(new Error('No se encontró "upload_url" en la respuesta'));
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data.upload_url) return resolve(data.upload_url);
+          reject(new Error('Respuesta sin upload_url'));
+        } catch {
+          reject(new Error('Respuesta inválida del servidor'));
         }
+      } else if (xhr.status === 413) {
+        reject(new Error('El archivo es demasiado grande (límite 4.5MB en Vercel Hobby)'));
       } else {
-        logMessage(`Error al subir. Status: ${currentXhr.status}`);
-        logMessage("Respuesta del servidor: " + currentXhr.responseText);
-        reject(new Error(`Error al subir. Status: ${currentXhr.status}`));
+        reject(new Error(`Subida falló (HTTP ${xhr.status})`));
       }
-      currentXhr = null;
     };
-
-    currentXhr.onerror = () => {
-      logMessage("Error de red o CORS al subir.");
-      reject(new Error("Error de red o CORS"));
-      currentXhr = null;
-    };
-
-    currentXhr.send(file);
+    xhr.onerror = () => reject(new Error('Error de red al subir'));
+    xhr.onabort = () => reject(new Error('Subida cancelada'));
+    xhr.send(file);
   });
 }
 
-// Detener la subida en curso
-function stopUpload() {
-  if (currentXhr) {
-    logMessage("El usuario canceló la subida.");
-    currentXhr.abort();
-    currentXhr = null;
-    updateStatus("Subida cancelada por el usuario");
-    showStopButton(false);
+async function startTranscription(uploadUrl, lang, speakers) {
+  const body = {
+    audio_url: uploadUrl,
+    speaker_labels: true,
+    speakers_expected: speakers,
+  };
+  if (lang === 'auto') {
+    body.language_detection = true;
+  } else {
+    body.language_code = lang;
   }
-}
-
-// Iniciar transcripción
-async function startTranscription(uploadUrl, lang, spk) {
-  const response = await fetch("/api/transcript", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      audio_url: uploadUrl,
-      speaker_labels: true,
-      language_code: lang,
-      speakers_expected: +spk
-    })
+  const res = await fetch('/api/transcript', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
-
-  if (!response.ok) {
-    const text = await response.text();
-    logMessage(`Error iniciando transcripción. Status: ${response.status}`);
-    logMessage("Respuesta del servidor: " + text);
-    throw new Error(`No se pudo iniciar la transcripción (HTTP ${response.status})`);
+  if (!res.ok) {
+    const txt = await res.text();
+    log(`Error iniciando transcripción: ${txt}`);
+    throw new Error(`No se pudo iniciar la transcripción (HTTP ${res.status})`);
   }
-
-  const data = await response.json();
+  const data = await res.json();
   return data.id;
 }
 
-// Esperar a que finalice (polling)
 async function waitForTranscript(id) {
+  let lastStatus = '';
   while (true) {
-    const response = await fetch(`/api/transcript?id=${encodeURIComponent(id)}`);
-    const data = await response.json();
-
-    if (data.status === "completed") return data;
-    if (data.status === "error") {
-      logMessage(`Error en transcripción: ${data.error}`);
-      throw new Error(`Transcripción fallida: ${data.error}`);
+    if (state.cancelled) throw new Error('Cancelado');
+    const res = await fetch(`/api/transcript?id=${encodeURIComponent(id)}`);
+    const data = await res.json();
+    if (data.status === 'completed') return data;
+    if (data.status === 'error') throw new Error(`Transcripción falló: ${data.error || 'sin detalle'}`);
+    if (data.status !== lastStatus) {
+      lastStatus = data.status;
+      log(`Estado: ${data.status}`);
+      updateProgress(`Transcribiendo (${data.status})…`, null);
     }
-
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    updateStatus(`Estado: ${data.status}...`);
-    logMessage(`Esperando transcripción. Estado: ${data.status}`);
+    await sleep(2000);
   }
 }
 
-// Mostrar resultado
-function showResults(utterances) {
-  const formattedText = utterances
-    .map(u => `Speaker ${u.speaker}: ${u.text}`)
-    .join("\n\n");
-  document.getElementById("resultado").textContent = formattedText;
+async function cancelRemote(id) {
+  try {
+    await fetch(`/api/transcript?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    log(`Cancelado en AssemblyAI: ${id}`);
+  } catch (e) {
+    log(`No se pudo cancelar en AssemblyAI: ${e.message}`);
+  }
 }
 
-// Guardar txt
-function autoSaveLocal(text) {
-  const blob = new Blob([text], { type: "text/plain" });
+function cancel() {
+  if (state.cancelled) return;
+  state.cancelled = true;
+  if (state.xhr) state.xhr.abort();
+  if (state.transcriptId) cancelRemote(state.transcriptId);
+  hideProgress();
+  setDropDisabled(false);
+  toast('Operación cancelada');
+}
+
+function renderResult(file, result) {
+  els.resultFilename.textContent = file.name;
+  const parts = [];
+  if (result.audio_duration) parts.push(formatDuration(result.audio_duration));
+  if (result.utterances && result.utterances.length) {
+    const speakers = new Set(result.utterances.map(u => u.speaker)).size;
+    parts.push(`${speakers} ${speakers === 1 ? 'hablante' : 'hablantes'}`);
+  }
+  if (result.language_code) parts.push(`idioma: ${result.language_code}`);
+  els.resultMeta.textContent = parts.join(' · ');
+
+  els.utterances.innerHTML = '';
+  if (result.utterances && result.utterances.length) {
+    const colorOf = new Map();
+    result.utterances.forEach(u => {
+      if (!colorOf.has(u.speaker)) {
+        colorOf.set(u.speaker, SPEAKER_VARS[colorOf.size % SPEAKER_VARS.length]);
+      }
+      const node = document.createElement('div');
+      node.className = 'utterance';
+      node.style.setProperty('--speaker-color', `var(${colorOf.get(u.speaker)})`);
+      node.innerHTML = `
+        <span class="utterance-badge" aria-hidden="true"></span>
+        <div class="utterance-body">
+          <div class="utterance-meta">
+            <span class="utterance-speaker"></span>
+            <span class="utterance-time"></span>
+          </div>
+          <p class="utterance-text"></p>
+        </div>`;
+      node.querySelector('.utterance-badge').textContent = u.speaker;
+      node.querySelector('.utterance-speaker').textContent = `Hablante ${u.speaker}`;
+      node.querySelector('.utterance-time').textContent = formatTimestamp(u.start);
+      node.querySelector('.utterance-text').textContent = u.text;
+      els.utterances.appendChild(node);
+    });
+  } else {
+    const node = document.createElement('p');
+    node.className = 'utterance-text';
+    node.textContent = result.text || '(sin texto)';
+    els.utterances.appendChild(node);
+  }
+  els.resultPanel.hidden = false;
+}
+
+function hideResult() {
+  els.resultPanel.hidden = true;
+  els.utterances.innerHTML = '';
+}
+
+function showProgress(label, pct) {
+  els.progressPanel.hidden = false;
+  updateProgress(label, pct);
+}
+function updateProgress(label, pct) {
+  els.progressLabel.textContent = label;
+  if (pct === null) {
+    els.progressBar.classList.add('is-indeterminate');
+    els.progressBar.style.width = '';
+  } else {
+    els.progressBar.classList.remove('is-indeterminate');
+    els.progressBar.style.width = `${pct}%`;
+  }
+}
+function hideProgress() {
+  els.progressPanel.hidden = true;
+  els.progressBar.style.width = '0%';
+  els.progressBar.classList.remove('is-indeterminate');
+}
+function setDropDisabled(disabled) {
+  els.drop.classList.toggle('is-disabled', disabled);
+  els.drop.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+  els.drop.setAttribute('tabindex', disabled ? '-1' : '0');
+}
+
+async function copyToClipboard() {
+  if (!state.result) return;
+  try {
+    await navigator.clipboard.writeText(formatPlainText(state.result));
+    toast('Copiado al portapapeles', 'success');
+  } catch {
+    toast('No se pudo copiar', 'error');
+  }
+}
+function downloadTxt() {
+  if (!state.result || !state.currentFile) return;
+  const blob = new Blob([formatPlainText(state.result)], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `transcripcion_${Date.now()}.txt`;
-  link.click();
+  const a = document.createElement('a');
+  const base = state.currentFile.name.replace(/\.[^.]+$/, '');
+  a.href = url;
+  a.download = `${base}-transcripcion.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
   URL.revokeObjectURL(url);
 }
-
-// Helpers
-function showLoading(show) {
-  document.querySelector(".loading").style.display = show ? "block" : "none";
+function formatPlainText(result) {
+  if (result.utterances && result.utterances.length) {
+    return result.utterances
+      .map(u => `Hablante ${u.speaker}: ${u.text}`)
+      .join('\n\n');
+  }
+  return result.text || '';
 }
 
-function updateStatus(text) {
-  document.getElementById("statusText").textContent = text;
+function toast(message, kind = 'info') {
+  const node = document.createElement('div');
+  node.className = `toast toast-${kind}`;
+  const content = document.createElement('div');
+  content.className = 'toast-content';
+  content.textContent = message;
+  const close = document.createElement('button');
+  close.className = 'toast-close';
+  close.setAttribute('aria-label', 'Cerrar notificación');
+  close.textContent = '×';
+  node.appendChild(content);
+  node.appendChild(close);
+  els.toasts.appendChild(node);
+  const remove = () => node.remove();
+  close.addEventListener('click', remove);
+  setTimeout(remove, 4500);
 }
 
-function showStopButton(show) {
-  stopUploadBtn.style.display = show ? "block" : "none";
+function log(msg) {
+  const t = new Date().toLocaleTimeString();
+  els.logs.textContent += `[${t}] ${msg}\n`;
+  els.logs.scrollTop = els.logs.scrollHeight;
 }
 
-function logMessage(msg) {
-  const logsEl = document.getElementById("logs");
-  const timestamp = new Date().toLocaleTimeString();
-  logsEl.textContent += `[${timestamp}] ${msg}\n`;
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function formatBytes(b) {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 }
-
-function clearLogs() {
-  document.getElementById("logs").textContent = "";
+function formatDuration(seconds) {
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}:${pad(m)}:${pad(s)}`;
+  return `${m}:${pad(s)}`;
 }
+function formatTimestamp(ms) {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}:${pad(m)}:${pad(s)}`;
+  return `${m}:${pad(s)}`;
+}
+function pad(n) { return n.toString().padStart(2, '0'); }

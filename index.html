@@ -2,50 +2,110 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Transcripción con Arrastrar & Soltar</title>
-  <!-- Vinculamos el CSS externo -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Polifonía — Transcripción con identificación de hablantes</title>
+  <meta name="description" content="Transcribe audio o video con separación automática por hablante.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="container">
-    <div class="controls">
-      <label for="languageSelect">Idioma:</label>
-      <select id="languageSelect">
-        <option value="en">Inglés (en)</option>
-        <option value="es" selected>Español (es)</option>
-        <option value="fr">Francés (fr)</option>
-      </select>
+  <header class="site-header">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="2" y="10" width="2" height="4" rx="1" fill="currentColor"/>
+        <rect x="6" y="6" width="2" height="12" rx="1" fill="currentColor"/>
+        <rect x="10" y="3" width="2" height="18" rx="1" fill="currentColor"/>
+        <rect x="14" y="8" width="2" height="8" rx="1" fill="currentColor"/>
+        <rect x="18" y="5" width="2" height="14" rx="1" fill="currentColor"/>
+      </svg>
+      <span class="brand-name">Polifonía</span>
+    </div>
+    <p class="brand-tag">Transcripción con identificación de hablantes</p>
+  </header>
 
-      <label for="speakersInput">N° de hablantes:</label>
-      <input type="number" id="speakersInput" value="2" min="1" max="10">
+  <main class="container">
+    <div
+      id="uploadBox"
+      class="drop-zone"
+      role="button"
+      tabindex="0"
+      aria-label="Subir archivo de audio o video"
+    >
+      <input type="file" id="audioInput" accept="audio/*,video/*" hidden>
+      <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <p class="drop-title">Arrastra un audio o video</p>
+      <p class="drop-subtitle">o haz clic para seleccionar · MP3, M4A, WAV, MP4 y más</p>
     </div>
 
-    <!-- Caja de subir y arrastrar archivos -->
-    <div class="upload-box" id="uploadBox">
-      <h2>🎧 Arrastra o haz clic para subir audio</h2>
-      <p>Formatos soportados: Audio, Video</p>
-      <!-- El input file está oculto y se dispara con un clic -->
-      <input type="file" id="audioInput" accept="audio/*,video/*">
-    </div>
+    <details class="options">
+      <summary>Opciones</summary>
+      <div class="options-grid">
+        <div class="field">
+          <label for="languageSelect">Idioma</label>
+          <select id="languageSelect">
+            <option value="auto" selected>Auto-detectar</option>
+            <option value="es">Español</option>
+            <option value="en">Inglés</option>
+            <option value="pt">Portugués</option>
+            <option value="fr">Francés</option>
+            <option value="de">Alemán</option>
+            <option value="it">Italiano</option>
+            <option value="nl">Holandés</option>
+            <option value="ja">Japonés</option>
+            <option value="ko">Coreano</option>
+            <option value="zh">Chino</option>
+            <option value="ru">Ruso</option>
+            <option value="ar">Árabe</option>
+            <option value="hi">Hindi</option>
+            <option value="tr">Turco</option>
+            <option value="pl">Polaco</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="speakersInput">Hablantes esperados</label>
+          <input type="number" id="speakersInput" value="2" min="1" max="10">
+        </div>
+      </div>
+    </details>
 
-    <!-- Loader -->
-    <div class="loading">
-      <div class="spinner"></div>
-      <div class="status" id="statusText">Iniciando...</div>
-    </div>
+    <section id="progressPanel" class="panel progress-panel" hidden>
+      <div class="progress-header">
+        <span id="progressLabel" aria-live="polite">Subiendo archivo…</span>
+        <button id="cancelBtn" class="btn btn-ghost btn-sm" type="button">Cancelar</button>
+      </div>
+      <div class="progress-track">
+        <div id="progressBar" class="progress-bar"></div>
+      </div>
+    </section>
 
-    <!-- Botón de detener subida -->
-    <button id="stopUploadBtn" class="stop-upload-btn">Detener Subida</button>
+    <section id="resultPanel" class="panel result-panel" hidden>
+      <header class="result-header">
+        <div class="result-meta">
+          <strong id="resultFilename">archivo</strong>
+          <span id="resultMeta" class="muted"></span>
+        </div>
+        <div class="result-actions">
+          <button id="copyBtn" class="btn btn-secondary" type="button">Copiar</button>
+          <button id="downloadBtn" class="btn btn-primary" type="button">Descargar .txt</button>
+        </div>
+      </header>
+      <div id="utterances" class="utterances"></div>
+    </section>
 
-    <!-- Resultado de la transcripción -->
-    <pre id="resultado"></pre>
+    <details class="logs">
+      <summary>Detalles técnicos</summary>
+      <pre id="logs" aria-live="polite"></pre>
+    </details>
+  </main>
 
-    <!-- Sección para logs -->
-    <h3>Logs</h3>
-    <pre id="logs"></pre>
-  </div>
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 
-  <!-- Archivo JS externo -->
   <script src="main.js"></script>
 </body>
 </html>

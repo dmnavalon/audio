@@ -3,10 +3,7 @@ export const config = { runtime: 'edge' };
 export default async function handler(request) {
   const apiKey = process.env.ASSEMBLYAI_API_KEY;
   if (!apiKey) {
-    return new Response(
-      JSON.stringify({ error: 'ASSEMBLYAI_API_KEY no configurada en el servidor' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonError('ASSEMBLYAI_API_KEY no configurada en el servidor', 500);
   }
 
   if (request.method === 'POST') {
@@ -26,18 +23,13 @@ export default async function handler(request) {
     });
   }
 
-  if (request.method === 'GET') {
+  if (request.method === 'GET' || request.method === 'DELETE') {
     const url = new URL(request.url);
     const id = url.searchParams.get('id');
-    if (!id) {
-      return new Response(JSON.stringify({ error: 'Falta el parámetro id' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
+    if (!id) return jsonError('Falta el parámetro id', 400);
     const aaiRes = await fetch(
       `https://api.assemblyai.com/v2/transcript/${encodeURIComponent(id)}`,
-      { headers: { Authorization: apiKey } }
+      { method: request.method, headers: { Authorization: apiKey } }
     );
     const data = await aaiRes.text();
     return new Response(data, {
@@ -46,5 +38,12 @@ export default async function handler(request) {
     });
   }
 
-  return new Response('Method not allowed', { status: 405 });
+  return jsonError('Method not allowed', 405);
+}
+
+function jsonError(message, status) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
