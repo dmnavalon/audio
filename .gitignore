@@ -1,0 +1,11 @@
+.DS_Store
+node_modules/
+.vercel
+.env
+.env.local
+*.log
+__pycache__/
+*.pyc
+
+# El Chat.html y app.py original no se publican
+Chat.html

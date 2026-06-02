@@ -1,0 +1,10 @@
+{
+  "name": "audio-transcriber",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Transcripción de audio con diarización usando AssemblyAI",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  }
+}

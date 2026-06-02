@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Transcripción con Arrastrar & Soltar</title>
+  <!-- Vinculamos el CSS externo -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="controls">
+      <label for="languageSelect">Idioma:</label>
+      <select id="languageSelect">
+        <option value="en">Inglés (en)</option>
+        <option value="es" selected>Español (es)</option>
+        <option value="fr">Francés (fr)</option>
+      </select>
+
+      <label for="speakersInput">N° de hablantes:</label>
+      <input type="number" id="speakersInput" value="2" min="1" max="10">
+    </div>
+
+    <!-- Caja de subir y arrastrar archivos -->
+    <div class="upload-box" id="uploadBox">
+      <h2>🎧 Arrastra o haz clic para subir audio</h2>
+      <p>Formatos soportados: Audio, Video</p>
+      <!-- El input file está oculto y se dispara con un clic -->
+      <input type="file" id="audioInput" accept="audio/*,video/*">
+    </div>
+
+    <!-- Loader -->
+    <div class="loading">
+      <div class="spinner"></div>
+      <div class="status" id="statusText">Iniciando...</div>
+    </div>
+
+    <!-- Botón de detener subida -->
+    <button id="stopUploadBtn" class="stop-upload-btn">Detener Subida</button>
+
+    <!-- Resultado de la transcripción -->
+    <pre id="resultado"></pre>
+
+    <!-- Sección para logs -->
+    <h3>Logs</h3>
+    <pre id="logs"></pre>
+  </div>
+
+  <!-- Archivo JS externo -->
+  <script src="main.js"></script>
+</body>
+</html>
