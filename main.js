@@ -357,10 +357,8 @@ function renderHistory(options = {}) {
   const items = loadHistory();
   els.historySection.hidden = !items.length;
   els.historyList.innerHTML = '';
-  items.forEach((item, idx) => {
-    const isOpen = options.openId
-      ? item.transcript_id === options.openId
-      : idx === 0;
+  items.forEach(item => {
+    const isOpen = options.openId === item.transcript_id;
     els.historyList.appendChild(createHistoryItem(item, isOpen));
   });
 }
@@ -370,9 +368,6 @@ function createHistoryItem(entry, isOpen) {
   card.className = 'history-item panel';
   card.dataset.id = entry.transcript_id;
   if (isOpen) card.classList.add('is-open');
-
-  const header = document.createElement('header');
-  header.className = 'history-item-header';
 
   const toggle = document.createElement('button');
   toggle.className = 'history-toggle';
@@ -392,15 +387,26 @@ function createHistoryItem(entry, isOpen) {
     const open = card.classList.toggle('is-open');
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
-  header.appendChild(toggle);
+  card.appendChild(toggle);
+
+  const body = document.createElement('div');
+  body.className = 'history-item-body';
+  body.appendChild(renderUtterances(entry));
+
+  const integ = document.createElement('div');
+  integ.className = 'history-integrate';
+  integ.hidden = true;
+  integ.appendChild(renderIntegrate(entry));
+  body.appendChild(integ);
 
   const actions = document.createElement('div');
   actions.className = 'history-actions';
   actions.innerHTML = `
-    <button class="btn btn-secondary btn-sm" data-action="copy" type="button">Copiar</button>
-    <button class="btn btn-secondary btn-sm" data-action="download" type="button">.txt</button>
-    <button class="btn btn-secondary btn-sm" data-action="integrate" type="button">Integración</button>
-    <button class="btn btn-ghost history-delete" data-action="delete" type="button" aria-label="Quitar del historial">×</button>`;
+    <button class="btn btn-ghost btn-sm" data-action="copy" type="button">Copiar texto</button>
+    <button class="btn btn-ghost btn-sm" data-action="download" type="button">Descargar .txt</button>
+    <button class="btn btn-ghost btn-sm" data-action="integrate" type="button">Integración API</button>
+    <span class="actions-spacer"></span>
+    <button class="btn btn-ghost btn-sm history-delete" data-action="delete" type="button">Quitar</button>`;
   actions.addEventListener('click', e => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
@@ -410,23 +416,13 @@ function createHistoryItem(entry, isOpen) {
     if (action === 'integrate') {
       const panel = card.querySelector('.history-integrate');
       panel.hidden = !panel.hidden;
+      btn.classList.toggle('is-active', !panel.hidden);
     }
     if (action === 'delete') deleteEntry(entry.transcript_id);
   });
-  header.appendChild(actions);
-  card.appendChild(header);
+  body.appendChild(actions);
 
-  const body = document.createElement('div');
-  body.className = 'history-item-body';
-  body.appendChild(renderUtterances(entry));
   card.appendChild(body);
-
-  const integ = document.createElement('div');
-  integ.className = 'history-integrate';
-  integ.hidden = true;
-  integ.appendChild(renderIntegrate(entry));
-  card.appendChild(integ);
-
   return card;
 }
 
@@ -482,56 +478,53 @@ function renderIntegrate(entry) {
     api_url: apiUrl,
   }, null, 2);
 
-  const rows = [
-    { label: 'Transcript ID', value: entry.transcript_id, type: 'inline' },
-    { label: 'Endpoint (GET)', value: apiUrl, type: 'inline' },
-    { label: 'cURL', value: curlSnippet, type: 'block' },
-    { label: 'JSON metadata', value: jsonMeta, type: 'block' },
-  ];
-
-  rows.forEach(row => {
-    const div = document.createElement('div');
-    div.className = row.type === 'inline' ? 'integrate-row' : 'integrate-snippet';
-
-    const label = document.createElement('span');
-    label.className = 'integrate-label';
-    label.textContent = row.label;
-    div.appendChild(label);
-
-    if (row.type === 'inline') {
-      const code = document.createElement('code');
-      code.className = 'integrate-inline-value';
-      code.textContent = row.value;
-      div.appendChild(code);
-    } else {
-      const pre = document.createElement('pre');
-      pre.className = 'integrate-block';
-      const code = document.createElement('code');
-      code.textContent = row.value;
-      pre.appendChild(code);
-      div.appendChild(pre);
-    }
-
-    const btn = document.createElement('button');
-    btn.className = 'btn btn-ghost btn-sm';
-    btn.type = 'button';
-    btn.textContent = 'Copiar';
-    btn.addEventListener('click', () => {
-      navigator.clipboard.writeText(row.value)
-        .then(() => toast(`${row.label} copiado`, 'success'))
-        .catch(() => toast('No se pudo copiar', 'error'));
-    });
-    div.appendChild(btn);
-
-    wrapper.appendChild(div);
-  });
-
-  const note = document.createElement('p');
-  note.className = 'integrate-note';
-  note.textContent = 'La key viaja en el header Authorization. Nunca la incluyas en URLs ni la compartas. La transcripción queda guardada en AssemblyAI mientras tu cuenta la mantenga.';
-  wrapper.appendChild(note);
+  wrapper.appendChild(buildInlineRow('ID', entry.transcript_id));
+  wrapper.appendChild(buildInlineRow('GET', apiUrl));
+  wrapper.appendChild(buildSnippetDetails('cURL', curlSnippet));
+  wrapper.appendChild(buildSnippetDetails('JSON metadata', jsonMeta));
 
   return wrapper;
+}
+
+function buildInlineRow(label, value) {
+  const div = document.createElement('div');
+  div.className = 'integrate-row';
+  div.innerHTML = `
+    <span class="integrate-label"></span>
+    <code class="integrate-value"></code>
+    <button class="btn btn-ghost btn-sm integrate-copy" type="button">Copiar</button>`;
+  div.querySelector('.integrate-label').textContent = label;
+  div.querySelector('.integrate-value').textContent = value;
+  div.querySelector('.integrate-copy').addEventListener('click', () => copyValue(value, label));
+  return div;
+}
+
+function buildSnippetDetails(label, value) {
+  const det = document.createElement('details');
+  det.className = 'integrate-details';
+  const sum = document.createElement('summary');
+  sum.className = 'integrate-summary';
+  sum.textContent = label;
+  det.appendChild(sum);
+  const pre = document.createElement('pre');
+  pre.className = 'integrate-block';
+  const code = document.createElement('code');
+  code.textContent = value;
+  pre.appendChild(code);
+  det.appendChild(pre);
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-ghost btn-sm integrate-copy';
+  btn.type = 'button';
+  btn.textContent = 'Copiar';
+  btn.addEventListener('click', e => { e.preventDefault(); copyValue(value, label); });
+  det.appendChild(btn);
+  return det;
+}
+
+function copyValue(value, label) {
+  navigator.clipboard.writeText(value)
+    .then(() => toast(`${label} copiado`, 'success'))
+    .catch(() => toast('No se pudo copiar', 'error'));
 }
 
 function copyEntryText(entry) {
