@@ -360,16 +360,40 @@ async function refreshHistory(options = {}) {
   }
 
   try {
-    const res = await fetch(`${AAI}/transcript?limit=100`, {
-      headers: { Authorization: apiKey },
-    });
-    if (!res.ok) {
-      if (res.status === 401) throw new Error('API key inválida');
-      throw new Error(`HTTP ${res.status}`);
+    const all = [];
+    const seen = new Set();
+    const MAX_PAGES = 10;
+    const PER_PAGE = 200;
+    let beforeId = null;
+
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const url = new URL(`${AAI}/transcript`);
+      url.searchParams.set('limit', String(PER_PAGE));
+      if (beforeId) url.searchParams.set('before_id', beforeId);
+
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: apiKey },
+      });
+      if (!res.ok) {
+        if (res.status === 401) throw new Error('API key inválida');
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const transcripts = data.transcripts || [];
+      if (!transcripts.length) break;
+
+      for (const t of transcripts) {
+        if (!seen.has(t.id)) {
+          seen.add(t.id);
+          all.push(t);
+        }
+      }
+      beforeId = transcripts[transcripts.length - 1].id;
+      els.refreshHistoryBtn.textContent = `Cargando ${all.length}…`;
+      if (transcripts.length < PER_PAGE) break;
     }
-    const data = await res.json();
-    const list = data.transcripts || [];
-    renderRemoteHistory(list, options);
+
+    renderRemoteHistory(all, options);
   } catch (err) {
     log(`Error cargando historial: ${err.message}`);
     els.historyList.innerHTML = '';
