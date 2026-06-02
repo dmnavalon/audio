@@ -3,6 +3,8 @@
 // (no pasa por ningún servidor — sin límite de tamaño).
 
 const KEY_STORAGE = 'polifonia.aai.key';
+const HIST_STORAGE = 'polifonia.history';
+const HIST_MAX = 50;
 const AAI = 'https://api.assemblyai.com/v2';
 
 const els = {
@@ -14,20 +16,15 @@ const els = {
   progressLabel: document.getElementById('progressLabel'),
   progressBar: document.getElementById('progressBar'),
   cancelBtn: document.getElementById('cancelBtn'),
-  resultPanel: document.getElementById('resultPanel'),
-  resultFilename: document.getElementById('resultFilename'),
-  resultMeta: document.getElementById('resultMeta'),
-  utterances: document.getElementById('utterances'),
-  copyBtn: document.getElementById('copyBtn'),
-  downloadBtn: document.getElementById('downloadBtn'),
+  historySection: document.getElementById('historySection'),
+  historyList: document.getElementById('historyList'),
+  clearHistoryBtn: document.getElementById('clearHistoryBtn'),
   logs: document.getElementById('logs'),
   toasts: document.getElementById('toasts'),
-  // Key management
   keyNotice: document.getElementById('keyNotice'),
   keyStatus: document.getElementById('keyStatus'),
   keyForm: document.getElementById('keyForm'),
   keyInput: document.getElementById('keyInput'),
-  keySaveBtn: document.getElementById('keySaveBtn'),
   keyCancelBtn: document.getElementById('keyCancelBtn'),
   configureKeyBtn: document.getElementById('configureKeyBtn'),
   editKeyBtn: document.getElementById('editKeyBtn'),
@@ -44,8 +41,6 @@ const state = {
   xhr: null,
   transcriptId: null,
   cancelled: false,
-  currentFile: null,
-  result: null,
 };
 
 // --- API key management ---
@@ -62,7 +57,6 @@ function clearApiKey() {
 }
 function maskedKey() {
   const k = getApiKey();
-  if (!k) return '';
   return k.length > 8 ? `•••${k.slice(-4)}` : '•••';
 }
 function refreshKeyUI() {
@@ -72,9 +66,6 @@ function refreshKeyUI() {
   els.editKeyBtn.hidden = !hasKey;
   els.clearKeyBtn.hidden = !hasKey;
   setDropDisabled(!hasKey);
-  if (!hasKey) {
-    els.drop.setAttribute('aria-disabled', 'true');
-  }
 }
 function showKeyForm() {
   els.keyForm.hidden = false;
@@ -154,8 +145,7 @@ els.input.addEventListener('change', e => {
 });
 
 els.cancelBtn.addEventListener('click', cancel);
-els.copyBtn.addEventListener('click', copyToClipboard);
-els.downloadBtn.addEventListener('click', downloadTxt);
+els.clearHistoryBtn.addEventListener('click', clearAllHistory);
 
 // --- Main flow ---
 async function handleFile(file) {
@@ -167,9 +157,6 @@ async function handleFile(file) {
   }
 
   state.cancelled = false;
-  state.currentFile = file;
-  state.result = null;
-  hideResult();
   setDropDisabled(true);
   showProgress(`Subiendo "${file.name}"…`, 0);
   log(`Iniciando: ${file.name} (${formatBytes(file.size)})`);
@@ -195,8 +182,7 @@ async function handleFile(file) {
     if (state.cancelled) return;
     log('Transcripción completa');
 
-    state.result = result;
-    renderResult(file, result);
+    addToHistory(result, file);
     toast('Transcripción lista', 'success');
   } catch (err) {
     if (state.cancelled) {
@@ -311,21 +297,145 @@ function cancel() {
   toast('Operación cancelada');
 }
 
-function renderResult(file, result) {
-  els.resultFilename.textContent = file.name;
-  const parts = [];
-  if (result.audio_duration) parts.push(formatDuration(result.audio_duration));
-  if (result.utterances && result.utterances.length) {
-    const speakers = new Set(result.utterances.map(u => u.speaker)).size;
-    parts.push(`${speakers} ${speakers === 1 ? 'hablante' : 'hablantes'}`);
+// --- History ---
+function loadHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(HIST_STORAGE) || '[]');
+  } catch {
+    return [];
   }
-  if (result.language_code) parts.push(`idioma: ${result.language_code}`);
-  els.resultMeta.textContent = parts.join(' · ');
+}
+function saveHistory(items) {
+  const trimmed = items.slice(0, HIST_MAX);
+  try {
+    localStorage.setItem(HIST_STORAGE, JSON.stringify(trimmed));
+  } catch {
+    while (trimmed.length > 3) {
+      trimmed.pop();
+      try {
+        localStorage.setItem(HIST_STORAGE, JSON.stringify(trimmed));
+        toast('Historial truncado por límite de almacenamiento', 'info');
+        return;
+      } catch {}
+    }
+  }
+}
+function addToHistory(result, file) {
+  const items = loadHistory();
+  const speakers = result.utterances
+    ? [...new Set(result.utterances.map(u => u.speaker))]
+    : [];
+  const entry = {
+    transcript_id: result.id,
+    filename: file.name,
+    file_size: file.size,
+    created_at: new Date().toISOString(),
+    audio_duration: result.audio_duration || null,
+    speakers,
+    language_code: result.language_code || null,
+    utterances: result.utterances || null,
+    text: result.text || '',
+  };
+  items.unshift(entry);
+  saveHistory(items);
+  renderHistory({ openId: entry.transcript_id });
+}
+function deleteEntry(id) {
+  if (!confirm('¿Quitar esta transcripción del historial?\n\n(No se borra en AssemblyAI — sigue accesible vía API con su ID.)')) return;
+  saveHistory(loadHistory().filter(x => x.transcript_id !== id));
+  renderHistory();
+  toast('Quitada del historial');
+}
+function clearAllHistory() {
+  if (!confirm('¿Borrar todo el historial local?\n\n(No se borran las transcripciones en AssemblyAI.)')) return;
+  localStorage.removeItem(HIST_STORAGE);
+  renderHistory();
+  toast('Historial borrado');
+}
 
-  els.utterances.innerHTML = '';
-  if (result.utterances && result.utterances.length) {
+function renderHistory(options = {}) {
+  const items = loadHistory();
+  els.historySection.hidden = !items.length;
+  els.historyList.innerHTML = '';
+  items.forEach((item, idx) => {
+    const isOpen = options.openId
+      ? item.transcript_id === options.openId
+      : idx === 0;
+    els.historyList.appendChild(createHistoryItem(item, isOpen));
+  });
+}
+
+function createHistoryItem(entry, isOpen) {
+  const card = document.createElement('article');
+  card.className = 'history-item panel';
+  card.dataset.id = entry.transcript_id;
+  if (isOpen) card.classList.add('is-open');
+
+  const header = document.createElement('header');
+  header.className = 'history-item-header';
+
+  const toggle = document.createElement('button');
+  toggle.className = 'history-toggle';
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  toggle.innerHTML = `
+    <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div class="history-meta">
+      <strong class="history-filename"></strong>
+      <span class="muted history-row-meta"></span>
+    </div>`;
+  toggle.querySelector('.history-filename').textContent = entry.filename;
+  toggle.querySelector('.history-row-meta').textContent = formatRowMeta(entry);
+  toggle.addEventListener('click', () => {
+    const open = card.classList.toggle('is-open');
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  header.appendChild(toggle);
+
+  const actions = document.createElement('div');
+  actions.className = 'history-actions';
+  actions.innerHTML = `
+    <button class="btn btn-secondary btn-sm" data-action="copy" type="button">Copiar</button>
+    <button class="btn btn-secondary btn-sm" data-action="download" type="button">.txt</button>
+    <button class="btn btn-secondary btn-sm" data-action="integrate" type="button">Integración</button>
+    <button class="btn btn-ghost history-delete" data-action="delete" type="button" aria-label="Quitar del historial">×</button>`;
+  actions.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    if (action === 'copy') copyEntryText(entry);
+    if (action === 'download') downloadEntryTxt(entry);
+    if (action === 'integrate') {
+      const panel = card.querySelector('.history-integrate');
+      panel.hidden = !panel.hidden;
+    }
+    if (action === 'delete') deleteEntry(entry.transcript_id);
+  });
+  header.appendChild(actions);
+  card.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'history-item-body';
+  body.appendChild(renderUtterances(entry));
+  card.appendChild(body);
+
+  const integ = document.createElement('div');
+  integ.className = 'history-integrate';
+  integ.hidden = true;
+  integ.appendChild(renderIntegrate(entry));
+  card.appendChild(integ);
+
+  return card;
+}
+
+function renderUtterances(entry) {
+  const container = document.createElement('div');
+  container.className = 'utterances';
+  if (entry.utterances && entry.utterances.length) {
     const colorOf = new Map();
-    result.utterances.forEach(u => {
+    entry.utterances.forEach(u => {
       if (!colorOf.has(u.speaker)) {
         colorOf.set(u.speaker, SPEAKER_VARS[colorOf.size % SPEAKER_VARS.length]);
       }
@@ -345,22 +455,132 @@ function renderResult(file, result) {
       node.querySelector('.utterance-speaker').textContent = `Hablante ${u.speaker}`;
       node.querySelector('.utterance-time').textContent = formatTimestamp(u.start);
       node.querySelector('.utterance-text').textContent = u.text;
-      els.utterances.appendChild(node);
+      container.appendChild(node);
     });
   } else {
     const node = document.createElement('p');
     node.className = 'utterance-text';
-    node.textContent = result.text || '(sin texto)';
-    els.utterances.appendChild(node);
+    node.textContent = entry.text || '(sin texto)';
+    container.appendChild(node);
   }
-  els.resultPanel.hidden = false;
+  return container;
 }
 
-function hideResult() {
-  els.resultPanel.hidden = true;
-  els.utterances.innerHTML = '';
+function renderIntegrate(entry) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'integrate';
+
+  const apiUrl = `${AAI}/transcript/${entry.transcript_id}`;
+  const curlSnippet = `curl ${apiUrl} \\\n  -H "Authorization: TU_API_KEY"`;
+  const jsonMeta = JSON.stringify({
+    transcript_id: entry.transcript_id,
+    filename: entry.filename,
+    duration_seconds: entry.audio_duration,
+    speakers: entry.speakers,
+    language: entry.language_code,
+    created_at: entry.created_at,
+    api_url: apiUrl,
+  }, null, 2);
+
+  const rows = [
+    { label: 'Transcript ID', value: entry.transcript_id, type: 'inline' },
+    { label: 'Endpoint (GET)', value: apiUrl, type: 'inline' },
+    { label: 'cURL', value: curlSnippet, type: 'block' },
+    { label: 'JSON metadata', value: jsonMeta, type: 'block' },
+  ];
+
+  rows.forEach(row => {
+    const div = document.createElement('div');
+    div.className = row.type === 'inline' ? 'integrate-row' : 'integrate-snippet';
+
+    const label = document.createElement('span');
+    label.className = 'integrate-label';
+    label.textContent = row.label;
+    div.appendChild(label);
+
+    if (row.type === 'inline') {
+      const code = document.createElement('code');
+      code.className = 'integrate-inline-value';
+      code.textContent = row.value;
+      div.appendChild(code);
+    } else {
+      const pre = document.createElement('pre');
+      pre.className = 'integrate-block';
+      const code = document.createElement('code');
+      code.textContent = row.value;
+      pre.appendChild(code);
+      div.appendChild(pre);
+    }
+
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-ghost btn-sm';
+    btn.type = 'button';
+    btn.textContent = 'Copiar';
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(row.value)
+        .then(() => toast(`${row.label} copiado`, 'success'))
+        .catch(() => toast('No se pudo copiar', 'error'));
+    });
+    div.appendChild(btn);
+
+    wrapper.appendChild(div);
+  });
+
+  const note = document.createElement('p');
+  note.className = 'integrate-note';
+  note.textContent = 'La key viaja en el header Authorization. Nunca la incluyas en URLs ni la compartas. La transcripción queda guardada en AssemblyAI mientras tu cuenta la mantenga.';
+  wrapper.appendChild(note);
+
+  return wrapper;
 }
 
+function copyEntryText(entry) {
+  navigator.clipboard.writeText(formatPlainText(entry))
+    .then(() => toast('Texto copiado', 'success'))
+    .catch(() => toast('No se pudo copiar', 'error'));
+}
+function downloadEntryTxt(entry) {
+  const blob = new Blob([formatPlainText(entry)], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const base = entry.filename.replace(/\.[^.]+$/, '');
+  a.href = url;
+  a.download = `${base}-transcripcion.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+function formatPlainText(entry) {
+  if (entry.utterances && entry.utterances.length) {
+    return entry.utterances
+      .map(u => `Hablante ${u.speaker}: ${u.text}`)
+      .join('\n\n');
+  }
+  return entry.text || '';
+}
+function formatRowMeta(entry) {
+  const parts = [];
+  if (entry.audio_duration) parts.push(formatDuration(entry.audio_duration));
+  if (entry.speakers.length) {
+    parts.push(`${entry.speakers.length} ${entry.speakers.length === 1 ? 'hablante' : 'hablantes'}`);
+  }
+  if (entry.language_code) parts.push(entry.language_code);
+  parts.push(formatRelativeTime(entry.created_at));
+  return parts.join(' · ');
+}
+function formatRelativeTime(iso) {
+  const then = new Date(iso).getTime();
+  const delta = (Date.now() - then) / 1000;
+  if (delta < 60) return 'hace unos segundos';
+  if (delta < 3600) return `hace ${Math.floor(delta / 60)} min`;
+  if (delta < 86400) return `hace ${Math.floor(delta / 3600)} h`;
+  const days = Math.floor(delta / 86400);
+  if (days < 7) return `hace ${days} d`;
+  return new Date(iso).toLocaleDateString();
+}
+
+// --- Progress / state ---
 function showProgress(label, pct) {
   els.progressPanel.hidden = false;
   updateProgress(label, pct);
@@ -385,37 +605,7 @@ function setDropDisabled(disabled) {
   els.drop.setAttribute('aria-disabled', disabled ? 'true' : 'false');
 }
 
-async function copyToClipboard() {
-  if (!state.result) return;
-  try {
-    await navigator.clipboard.writeText(formatPlainText(state.result));
-    toast('Copiado al portapapeles', 'success');
-  } catch {
-    toast('No se pudo copiar', 'error');
-  }
-}
-function downloadTxt() {
-  if (!state.result || !state.currentFile) return;
-  const blob = new Blob([formatPlainText(state.result)], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  const base = state.currentFile.name.replace(/\.[^.]+$/, '');
-  a.href = url;
-  a.download = `${base}-transcripcion.txt`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-function formatPlainText(result) {
-  if (result.utterances && result.utterances.length) {
-    return result.utterances
-      .map(u => `Hablante ${u.speaker}: ${u.text}`)
-      .join('\n\n');
-  }
-  return result.text || '';
-}
-
+// --- Toasts ---
 function toast(message, kind = 'info') {
   const node = document.createElement('div');
   node.className = `toast toast-${kind}`;
@@ -467,3 +657,4 @@ function pad(n) { return n.toString().padStart(2, '0'); }
 
 // Init
 refreshKeyUI();
+renderHistory();

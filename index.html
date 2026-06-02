@@ -119,18 +119,12 @@
       </div>
     </section>
 
-    <section id="resultPanel" class="panel result-panel" hidden>
-      <header class="result-header">
-        <div class="result-meta">
-          <strong id="resultFilename">archivo</strong>
-          <span id="resultMeta" class="muted"></span>
-        </div>
-        <div class="result-actions">
-          <button id="copyBtn" class="btn btn-secondary" type="button">Copiar</button>
-          <button id="downloadBtn" class="btn btn-primary" type="button">Descargar .txt</button>
-        </div>
+    <section id="historySection" class="history" hidden>
+      <header class="history-header">
+        <h2 class="history-title">Transcripciones</h2>
+        <button id="clearHistoryBtn" class="btn btn-ghost btn-sm" type="button">Borrar historial</button>
       </header>
-      <div id="utterances" class="utterances"></div>
+      <div id="historyList" class="history-list"></div>
     </section>
 
     <details class="logs">
