@@ -163,6 +163,106 @@ html, body {
   font-size: .88rem;
 }
 
+/* Notice (configurar API key) */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+}
+.notice-icon {
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.notice-text {
+  flex: 1;
+  min-width: 0;
+}
+.notice-text strong {
+  display: block;
+  font-size: .98rem;
+  margin-bottom: .1rem;
+}
+.notice-text p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: .88rem;
+}
+.notice-text a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.notice-text a:hover { text-decoration: underline; }
+
+/* API key row inside Options */
+.options-key {
+  border-top: 1px solid var(--border);
+  padding: .9rem 1.1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .55rem;
+}
+.key-status-row {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  flex-wrap: wrap;
+}
+.key-label {
+  font-size: .82rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.key-status {
+  font-size: .88rem;
+  color: var(--text);
+  font-family: var(--font-mono);
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+.key-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  align-items: stretch;
+}
+.key-form input {
+  flex: 1;
+  min-width: 180px;
+  font-family: var(--font-mono);
+  font-size: .88rem;
+  padding: .5rem .65rem;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: var(--radius);
+}
+.key-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-border);
+}
+.key-help {
+  margin: 0;
+  font-size: .78rem;
+  color: var(--text-subtle);
+}
+.key-help code {
+  font-family: var(--font-mono);
+  font-size: .85em;
+  background: var(--bg-muted);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
 .options,
 .logs {
   background: var(--bg);

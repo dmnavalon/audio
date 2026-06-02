@@ -1,5 +1,9 @@
 // Polifonía — transcripción con identificación de hablantes.
-// API key vive en el servidor (env ASSEMBLYAI_API_KEY). El front solo habla con /api/*.
+// La API key vive en localStorage. Las llamadas van directo a AssemblyAI
+// (no pasa por ningún servidor — sin límite de tamaño).
+
+const KEY_STORAGE = 'polifonia.aai.key';
+const AAI = 'https://api.assemblyai.com/v2';
 
 const els = {
   input: document.getElementById('audioInput'),
@@ -18,6 +22,17 @@ const els = {
   downloadBtn: document.getElementById('downloadBtn'),
   logs: document.getElementById('logs'),
   toasts: document.getElementById('toasts'),
+  // Key management
+  keyNotice: document.getElementById('keyNotice'),
+  keyStatus: document.getElementById('keyStatus'),
+  keyForm: document.getElementById('keyForm'),
+  keyInput: document.getElementById('keyInput'),
+  keySaveBtn: document.getElementById('keySaveBtn'),
+  keyCancelBtn: document.getElementById('keyCancelBtn'),
+  configureKeyBtn: document.getElementById('configureKeyBtn'),
+  editKeyBtn: document.getElementById('editKeyBtn'),
+  clearKeyBtn: document.getElementById('clearKeyBtn'),
+  optionsPanel: document.getElementById('optionsPanel'),
 };
 
 const SPEAKER_VARS = [
@@ -33,6 +48,67 @@ const state = {
   result: null,
 };
 
+// --- API key management ---
+function getApiKey() {
+  return localStorage.getItem(KEY_STORAGE) || '';
+}
+function saveApiKey(key) {
+  localStorage.setItem(KEY_STORAGE, key.trim());
+  refreshKeyUI();
+}
+function clearApiKey() {
+  localStorage.removeItem(KEY_STORAGE);
+  refreshKeyUI();
+}
+function maskedKey() {
+  const k = getApiKey();
+  if (!k) return '';
+  return k.length > 8 ? `•••${k.slice(-4)}` : '•••';
+}
+function refreshKeyUI() {
+  const hasKey = !!getApiKey();
+  els.keyNotice.hidden = hasKey;
+  els.keyStatus.textContent = hasKey ? `Configurada (${maskedKey()})` : 'No configurada';
+  els.editKeyBtn.hidden = !hasKey;
+  els.clearKeyBtn.hidden = !hasKey;
+  setDropDisabled(!hasKey);
+  if (!hasKey) {
+    els.drop.setAttribute('aria-disabled', 'true');
+  }
+}
+function showKeyForm() {
+  els.keyForm.hidden = false;
+  els.keyInput.value = '';
+  els.keyInput.focus();
+}
+function hideKeyForm() {
+  els.keyForm.hidden = true;
+  els.keyInput.value = '';
+}
+function openOptionsAndEditKey() {
+  els.optionsPanel.open = true;
+  showKeyForm();
+}
+
+els.configureKeyBtn.addEventListener('click', openOptionsAndEditKey);
+els.editKeyBtn.addEventListener('click', showKeyForm);
+els.clearKeyBtn.addEventListener('click', () => {
+  if (confirm('¿Borrar la API key guardada?')) clearApiKey();
+});
+els.keyForm.addEventListener('submit', e => {
+  e.preventDefault();
+  const v = els.keyInput.value.trim();
+  if (!v) {
+    toast('Pega una API key válida', 'error');
+    return;
+  }
+  saveApiKey(v);
+  hideKeyForm();
+  toast('API key guardada', 'success');
+});
+els.keyCancelBtn.addEventListener('click', hideKeyForm);
+
+// --- Drop zone ---
 ['dragenter', 'dragover'].forEach(ev =>
   els.drop.addEventListener(ev, e => {
     e.preventDefault();
@@ -48,16 +124,28 @@ const state = {
   })
 );
 els.drop.addEventListener('drop', e => {
-  if (els.drop.classList.contains('is-disabled')) return;
+  if (els.drop.classList.contains('is-disabled')) {
+    toast('Configura primero tu API key', 'error');
+    openOptionsAndEditKey();
+    return;
+  }
   if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
 });
 els.drop.addEventListener('click', () => {
-  if (!els.drop.classList.contains('is-disabled')) els.input.click();
+  if (els.drop.classList.contains('is-disabled')) {
+    openOptionsAndEditKey();
+    return;
+  }
+  els.input.click();
 });
 els.drop.addEventListener('keydown', e => {
-  if ((e.key === 'Enter' || e.key === ' ') && !els.drop.classList.contains('is-disabled')) {
+  if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault();
-    els.input.click();
+    if (els.drop.classList.contains('is-disabled')) {
+      openOptionsAndEditKey();
+    } else {
+      els.input.click();
+    }
   }
 });
 els.input.addEventListener('change', e => {
@@ -69,7 +157,15 @@ els.cancelBtn.addEventListener('click', cancel);
 els.copyBtn.addEventListener('click', copyToClipboard);
 els.downloadBtn.addEventListener('click', downloadTxt);
 
+// --- Main flow ---
 async function handleFile(file) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    toast('Configura primero tu API key', 'error');
+    openOptionsAndEditKey();
+    return;
+  }
+
   state.cancelled = false;
   state.currentFile = file;
   state.result = null;
@@ -79,23 +175,23 @@ async function handleFile(file) {
   log(`Iniciando: ${file.name} (${formatBytes(file.size)})`);
 
   try {
-    const uploadUrl = await uploadFile(file);
+    const uploadUrl = await uploadFile(file, apiKey);
     if (state.cancelled) return;
     log('Subida completa');
 
     updateProgress('Iniciando transcripción…', null);
     const langValue = els.langSelect.value;
     const speakers = Math.max(1, Math.min(10, +els.speakersInput.value || 2));
-    const id = await startTranscription(uploadUrl, langValue, speakers);
+    const id = await startTranscription(uploadUrl, langValue, speakers, apiKey);
     state.transcriptId = id;
     if (state.cancelled) {
-      cancelRemote(id);
+      cancelRemote(id, apiKey);
       return;
     }
     log(`Transcripción iniciada: ${id}`);
 
     updateProgress('Transcribiendo…', null);
-    const result = await waitForTranscript(id);
+    const result = await waitForTranscript(id, apiKey);
     if (state.cancelled) return;
     log('Transcripción completa');
 
@@ -111,17 +207,18 @@ async function handleFile(file) {
     toast(err.message || 'Algo salió mal', 'error');
   } finally {
     hideProgress();
-    setDropDisabled(false);
+    setDropDisabled(!getApiKey());
     state.xhr = null;
     state.transcriptId = null;
   }
 }
 
-function uploadFile(file) {
+function uploadFile(file, apiKey) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     state.xhr = xhr;
-    xhr.open('POST', '/api/upload');
+    xhr.open('POST', `${AAI}/upload`);
+    xhr.setRequestHeader('Authorization', apiKey);
     xhr.upload.onprogress = e => {
       if (e.lengthComputable) {
         const pct = (e.loaded / e.total) * 100;
@@ -137,8 +234,8 @@ function uploadFile(file) {
         } catch {
           reject(new Error('Respuesta inválida del servidor'));
         }
-      } else if (xhr.status === 413) {
-        reject(new Error('El archivo es demasiado grande (límite 4.5MB en Vercel Hobby)'));
+      } else if (xhr.status === 401) {
+        reject(new Error('API key inválida — revísala en Opciones'));
       } else {
         reject(new Error(`Subida falló (HTTP ${xhr.status})`));
       }
@@ -149,36 +246,36 @@ function uploadFile(file) {
   });
 }
 
-async function startTranscription(uploadUrl, lang, speakers) {
+async function startTranscription(uploadUrl, lang, speakers, apiKey) {
   const body = {
     audio_url: uploadUrl,
     speaker_labels: true,
     speakers_expected: speakers,
   };
-  if (lang === 'auto') {
-    body.language_detection = true;
-  } else {
-    body.language_code = lang;
-  }
-  const res = await fetch('/api/transcript', {
+  if (lang === 'auto') body.language_detection = true;
+  else body.language_code = lang;
+  const res = await fetch(`${AAI}/transcript`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
     const txt = await res.text();
     log(`Error iniciando transcripción: ${txt}`);
+    if (res.status === 401) throw new Error('API key inválida — revísala en Opciones');
     throw new Error(`No se pudo iniciar la transcripción (HTTP ${res.status})`);
   }
   const data = await res.json();
   return data.id;
 }
 
-async function waitForTranscript(id) {
+async function waitForTranscript(id, apiKey) {
   let lastStatus = '';
   while (true) {
     if (state.cancelled) throw new Error('Cancelado');
-    const res = await fetch(`/api/transcript?id=${encodeURIComponent(id)}`);
+    const res = await fetch(`${AAI}/transcript/${encodeURIComponent(id)}`, {
+      headers: { Authorization: apiKey },
+    });
     const data = await res.json();
     if (data.status === 'completed') return data;
     if (data.status === 'error') throw new Error(`Transcripción falló: ${data.error || 'sin detalle'}`);
@@ -191,9 +288,12 @@ async function waitForTranscript(id) {
   }
 }
 
-async function cancelRemote(id) {
+async function cancelRemote(id, apiKey) {
   try {
-    await fetch(`/api/transcript?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await fetch(`${AAI}/transcript/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { Authorization: apiKey },
+    });
     log(`Cancelado en AssemblyAI: ${id}`);
   } catch (e) {
     log(`No se pudo cancelar en AssemblyAI: ${e.message}`);
@@ -204,9 +304,10 @@ function cancel() {
   if (state.cancelled) return;
   state.cancelled = true;
   if (state.xhr) state.xhr.abort();
-  if (state.transcriptId) cancelRemote(state.transcriptId);
+  const apiKey = getApiKey();
+  if (state.transcriptId && apiKey) cancelRemote(state.transcriptId, apiKey);
   hideProgress();
-  setDropDisabled(false);
+  setDropDisabled(!getApiKey());
   toast('Operación cancelada');
 }
 
@@ -282,7 +383,6 @@ function hideProgress() {
 function setDropDisabled(disabled) {
   els.drop.classList.toggle('is-disabled', disabled);
   els.drop.setAttribute('aria-disabled', disabled ? 'true' : 'false');
-  els.drop.setAttribute('tabindex', disabled ? '-1' : '0');
 }
 
 async function copyToClipboard() {
@@ -344,7 +444,8 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function formatBytes(b) {
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 function formatDuration(seconds) {
   const total = Math.floor(seconds);
@@ -363,3 +464,6 @@ function formatTimestamp(ms) {
   return `${m}:${pad(s)}`;
 }
 function pad(n) { return n.toString().padStart(2, '0'); }
+
+// Init
+refreshKeyUI();

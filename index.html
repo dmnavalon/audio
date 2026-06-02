@@ -28,6 +28,19 @@
   </header>
 
   <main class="container">
+    <div id="keyNotice" class="notice" hidden>
+      <svg class="notice-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div class="notice-text">
+        <strong>Configura tu API key de AssemblyAI</strong>
+        <p>Se guarda solo en este navegador — nunca se envía a ningún servidor.
+          <a href="https://www.assemblyai.com/app/api-keys" target="_blank" rel="noopener">Obtén la tuya →</a>
+        </p>
+      </div>
+      <button id="configureKeyBtn" class="btn btn-primary" type="button">Configurar</button>
+    </div>
+
     <div
       id="uploadBox"
       class="drop-zone"
@@ -43,7 +56,7 @@
       <p class="drop-subtitle">o haz clic para seleccionar · MP3, M4A, WAV, MP4 y más</p>
     </div>
 
-    <details class="options">
+    <details class="options" id="optionsPanel">
       <summary>Opciones</summary>
       <div class="options-grid">
         <div class="field">
@@ -71,6 +84,28 @@
           <label for="speakersInput">Hablantes esperados</label>
           <input type="number" id="speakersInput" value="2" min="1" max="10">
         </div>
+      </div>
+      <div class="options-key">
+        <div class="key-status-row">
+          <span class="key-label">API key</span>
+          <span id="keyStatus" class="key-status">No configurada</span>
+          <button id="editKeyBtn" class="btn btn-ghost btn-sm" type="button" hidden>Cambiar</button>
+          <button id="clearKeyBtn" class="btn btn-ghost btn-sm" type="button" hidden>Borrar</button>
+        </div>
+        <form id="keyForm" class="key-form" hidden>
+          <input
+            type="password"
+            id="keyInput"
+            placeholder="Pega tu API key de AssemblyAI"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <button id="keySaveBtn" type="submit" class="btn btn-primary btn-sm">Guardar</button>
+          <button id="keyCancelBtn" type="button" class="btn btn-ghost btn-sm">Cancelar</button>
+        </form>
+        <p class="key-help">
+          Solo se guarda en este navegador (<code>localStorage</code>). Nunca viaja a ningún servidor.
+        </p>
       </div>
     </details>
 
