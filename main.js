@@ -1,10 +1,10 @@
 // Polifonía — transcripción con identificación de hablantes.
-// La API key vive en localStorage. Las llamadas van directo a AssemblyAI
-// (no pasa por ningún servidor — sin límite de tamaño).
+// La API key vive en localStorage. Las llamadas van directo a AssemblyAI.
+// La lista de transcripciones se trae desde AssemblyAI (cross-device sync).
 
 const KEY_STORAGE = 'polifonia.aai.key';
-const HIST_STORAGE = 'polifonia.history';
-const HIST_MAX = 50;
+const FILENAME_STORAGE = 'polifonia.filenames';
+const CACHE_STORAGE = 'polifonia.cache';
 const AAI = 'https://api.assemblyai.com/v2';
 
 const els = {
@@ -18,7 +18,7 @@ const els = {
   cancelBtn: document.getElementById('cancelBtn'),
   historySection: document.getElementById('historySection'),
   historyList: document.getElementById('historyList'),
-  clearHistoryBtn: document.getElementById('clearHistoryBtn'),
+  refreshHistoryBtn: document.getElementById('refreshHistoryBtn'),
   logs: document.getElementById('logs'),
   toasts: document.getElementById('toasts'),
   keyNotice: document.getElementById('keyNotice'),
@@ -50,10 +50,13 @@ function getApiKey() {
 function saveApiKey(key) {
   localStorage.setItem(KEY_STORAGE, key.trim());
   refreshKeyUI();
+  refreshHistory();
 }
 function clearApiKey() {
   localStorage.removeItem(KEY_STORAGE);
   refreshKeyUI();
+  els.historySection.hidden = true;
+  els.historyList.innerHTML = '';
 }
 function maskedKey() {
   const k = getApiKey();
@@ -84,7 +87,7 @@ function openOptionsAndEditKey() {
 els.configureKeyBtn.addEventListener('click', openOptionsAndEditKey);
 els.editKeyBtn.addEventListener('click', showKeyForm);
 els.clearKeyBtn.addEventListener('click', () => {
-  if (confirm('¿Borrar la API key guardada?')) clearApiKey();
+  if (confirm('¿Borrar la API key guardada en este navegador?')) clearApiKey();
 });
 els.keyForm.addEventListener('submit', e => {
   e.preventDefault();
@@ -145,9 +148,9 @@ els.input.addEventListener('change', e => {
 });
 
 els.cancelBtn.addEventListener('click', cancel);
-els.clearHistoryBtn.addEventListener('click', clearAllHistory);
+els.refreshHistoryBtn.addEventListener('click', () => refreshHistory());
 
-// --- Main flow ---
+// --- Main upload flow ---
 async function handleFile(file) {
   const apiKey = getApiKey();
   if (!apiKey) {
@@ -171,6 +174,7 @@ async function handleFile(file) {
     const speakers = Math.max(1, Math.min(10, +els.speakersInput.value || 2));
     const id = await startTranscription(uploadUrl, langValue, speakers, apiKey);
     state.transcriptId = id;
+    saveFilenameFor(id, file.name);
     if (state.cancelled) {
       cancelRemote(id, apiKey);
       return;
@@ -182,7 +186,8 @@ async function handleFile(file) {
     if (state.cancelled) return;
     log('Transcripción completa');
 
-    addToHistory(result, file);
+    cacheTranscript(id, result);
+    await refreshHistory({ openId: id });
     toast('Transcripción lista', 'success');
   } catch (err) {
     if (state.cancelled) {
@@ -297,72 +302,131 @@ function cancel() {
   toast('Operación cancelada');
 }
 
-// --- History ---
-function loadHistory() {
-  try {
-    return JSON.parse(localStorage.getItem(HIST_STORAGE) || '[]');
-  } catch {
-    return [];
-  }
+// --- Local enrichment (filenames + full-data cache) ---
+function loadFilenames() {
+  try { return JSON.parse(localStorage.getItem(FILENAME_STORAGE) || '{}'); }
+  catch { return {}; }
 }
-function saveHistory(items) {
-  const trimmed = items.slice(0, HIST_MAX);
-  try {
-    localStorage.setItem(HIST_STORAGE, JSON.stringify(trimmed));
-  } catch {
-    while (trimmed.length > 3) {
-      trimmed.pop();
-      try {
-        localStorage.setItem(HIST_STORAGE, JSON.stringify(trimmed));
-        toast('Historial truncado por límite de almacenamiento', 'info');
-        return;
-      } catch {}
-    }
-  }
+function saveFilenameFor(id, filename) {
+  const map = loadFilenames();
+  map[id] = filename;
+  try { localStorage.setItem(FILENAME_STORAGE, JSON.stringify(map)); } catch {}
 }
-function addToHistory(result, file) {
-  const items = loadHistory();
-  const speakers = result.utterances
-    ? [...new Set(result.utterances.map(u => u.speaker))]
-    : [];
-  const entry = {
-    transcript_id: result.id,
-    filename: file.name,
-    file_size: file.size,
-    created_at: new Date().toISOString(),
-    audio_duration: result.audio_duration || null,
-    speakers,
-    language_code: result.language_code || null,
-    utterances: result.utterances || null,
-    text: result.text || '',
+function removeFilenameFor(id) {
+  const map = loadFilenames();
+  delete map[id];
+  try { localStorage.setItem(FILENAME_STORAGE, JSON.stringify(map)); } catch {}
+}
+function loadCache() {
+  try { return JSON.parse(localStorage.getItem(CACHE_STORAGE) || '{}'); }
+  catch { return {}; }
+}
+function cacheTranscript(id, full) {
+  const cache = loadCache();
+  cache[id] = {
+    audio_duration: full.audio_duration || null,
+    language_code: full.language_code || null,
+    utterances: full.utterances || null,
+    text: full.text || '',
+    speakers: full.utterances ? [...new Set(full.utterances.map(u => u.speaker))] : [],
   };
-  items.unshift(entry);
-  saveHistory(items);
-  renderHistory({ openId: entry.transcript_id });
+  try {
+    localStorage.setItem(CACHE_STORAGE, JSON.stringify(cache));
+  } catch {
+    // Quota: drop everything except this entry
+    try { localStorage.setItem(CACHE_STORAGE, JSON.stringify({ [id]: cache[id] })); } catch {}
+  }
 }
-function deleteEntry(id) {
-  if (!confirm('¿Quitar esta transcripción del historial?\n\n(No se borra en AssemblyAI — sigue accesible vía API con su ID.)')) return;
-  saveHistory(loadHistory().filter(x => x.transcript_id !== id));
-  renderHistory();
-  toast('Quitada del historial');
-}
-function clearAllHistory() {
-  if (!confirm('¿Borrar todo el historial local?\n\n(No se borran las transcripciones en AssemblyAI.)')) return;
-  localStorage.removeItem(HIST_STORAGE);
-  renderHistory();
-  toast('Historial borrado');
+function removeCacheFor(id) {
+  const cache = loadCache();
+  delete cache[id];
+  try { localStorage.setItem(CACHE_STORAGE, JSON.stringify(cache)); } catch {}
 }
 
-function renderHistory(options = {}) {
-  const items = loadHistory();
-  els.historySection.hidden = !items.length;
+// --- History fetching ---
+async function refreshHistory(options = {}) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    els.historySection.hidden = true;
+    return;
+  }
+
+  els.historySection.hidden = false;
+  els.refreshHistoryBtn.disabled = true;
+  els.refreshHistoryBtn.textContent = 'Cargando…';
+
+  if (!els.historyList.children.length || els.historyList.querySelector('.history-empty')) {
+    els.historyList.innerHTML = '<p class="muted history-empty">Cargando transcripciones…</p>';
+  }
+
+  try {
+    const res = await fetch(`${AAI}/transcript?limit=100`, {
+      headers: { Authorization: apiKey },
+    });
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('API key inválida');
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const list = data.transcripts || [];
+    renderRemoteHistory(list, options);
+  } catch (err) {
+    log(`Error cargando historial: ${err.message}`);
+    els.historyList.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'muted history-empty';
+    p.textContent = `No se pudo cargar: ${err.message}`;
+    els.historyList.appendChild(p);
+    toast(`Error: ${err.message}`, 'error');
+  } finally {
+    els.refreshHistoryBtn.disabled = false;
+    els.refreshHistoryBtn.textContent = 'Actualizar';
+  }
+}
+
+function renderRemoteHistory(list, options = {}) {
   els.historyList.innerHTML = '';
-  items.forEach(item => {
-    const isOpen = options.openId === item.transcript_id;
-    els.historyList.appendChild(createHistoryItem(item, isOpen));
+  if (!list.length) {
+    const p = document.createElement('p');
+    p.className = 'muted history-empty';
+    p.textContent = 'Aún no tienes transcripciones en esta cuenta.';
+    els.historyList.appendChild(p);
+    return;
+  }
+  list.forEach(item => {
+    const entry = enrichListItem(item);
+    const isOpen = options.openId === entry.transcript_id;
+    els.historyList.appendChild(createHistoryItem(entry, isOpen));
   });
 }
 
+function enrichListItem(item) {
+  const filenames = loadFilenames();
+  const cache = loadCache();
+  const cached = cache[item.id] || {};
+  const fallbackName = `Sin título · ${formatShortDate(item.created)}`;
+  return {
+    transcript_id: item.id,
+    filename: filenames[item.id] || fallbackName,
+    created_at: item.created,
+    status: item.status,
+    audio_duration: cached.audio_duration ?? null,
+    language_code: cached.language_code ?? null,
+    speakers: cached.speakers || [],
+    utterances: 'utterances' in cached ? cached.utterances : undefined,
+    text: cached.text || '',
+    _loaded: 'utterances' in cached,
+  };
+}
+
+function formatShortDate(iso) {
+  if (!iso) return 'fecha desconocida';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 'fecha desconocida';
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString().slice(0, 5);
+}
+
+// --- History rendering ---
 function createHistoryItem(entry, isOpen) {
   const card = document.createElement('article');
   card.className = 'history-item panel';
@@ -380,18 +444,30 @@ function createHistoryItem(entry, isOpen) {
     <div class="history-meta">
       <strong class="history-filename"></strong>
       <span class="muted history-row-meta"></span>
-    </div>`;
+    </div>
+    <span class="history-status"></span>`;
   toggle.querySelector('.history-filename').textContent = entry.filename;
   toggle.querySelector('.history-row-meta').textContent = formatRowMeta(entry);
-  toggle.addEventListener('click', () => {
-    const open = card.classList.toggle('is-open');
-    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-  });
+  renderStatusBadge(toggle.querySelector('.history-status'), entry.status);
+  toggle.addEventListener('click', () => onToggle(card, entry, toggle, body));
   card.appendChild(toggle);
 
   const body = document.createElement('div');
   body.className = 'history-item-body';
-  body.appendChild(renderUtterances(entry));
+
+  const utterancesWrap = document.createElement('div');
+  utterancesWrap.className = 'utterances-wrap';
+  if (entry._loaded) {
+    utterancesWrap.appendChild(renderUtterances(entry));
+  } else {
+    const ph = document.createElement('p');
+    ph.className = 'muted';
+    ph.textContent = entry.status === 'completed'
+      ? '(Se carga al expandir)'
+      : `Estado: ${entry.status}`;
+    utterancesWrap.appendChild(ph);
+  }
+  body.appendChild(utterancesWrap);
 
   const integ = document.createElement('div');
   integ.className = 'history-integrate';
@@ -406,24 +482,101 @@ function createHistoryItem(entry, isOpen) {
     <button class="btn btn-ghost btn-sm" data-action="download" type="button">Descargar .txt</button>
     <button class="btn btn-ghost btn-sm" data-action="integrate" type="button">Integración API</button>
     <span class="actions-spacer"></span>
-    <button class="btn btn-ghost btn-sm history-delete" data-action="delete" type="button">Quitar</button>`;
-  actions.addEventListener('click', e => {
+    <button class="btn btn-ghost btn-sm history-delete" data-action="delete" type="button">Borrar</button>`;
+  actions.addEventListener('click', async e => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
     const action = btn.dataset.action;
-    if (action === 'copy') copyEntryText(entry);
-    if (action === 'download') downloadEntryTxt(entry);
-    if (action === 'integrate') {
-      const panel = card.querySelector('.history-integrate');
-      panel.hidden = !panel.hidden;
-      btn.classList.toggle('is-active', !panel.hidden);
+    if (action === 'copy') {
+      await ensureFullData(entry, card);
+      copyEntryText(entry);
     }
-    if (action === 'delete') deleteEntry(entry.transcript_id);
+    if (action === 'download') {
+      await ensureFullData(entry, card);
+      downloadEntryTxt(entry);
+    }
+    if (action === 'integrate') {
+      integ.hidden = !integ.hidden;
+      btn.classList.toggle('is-active', !integ.hidden);
+    }
+    if (action === 'delete') deleteEntryRemote(entry);
   });
   body.appendChild(actions);
 
   card.appendChild(body);
   return card;
+}
+
+async function onToggle(card, entry, toggle, body) {
+  const open = card.classList.toggle('is-open');
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open && !entry._loaded && entry.status === 'completed') {
+    await ensureFullData(entry, card);
+  }
+}
+
+async function ensureFullData(entry, card) {
+  if (entry._loaded) return;
+  if (entry.status !== 'completed') return;
+
+  const apiKey = getApiKey();
+  if (!apiKey) return;
+
+  const wrap = card.querySelector('.utterances-wrap');
+  wrap.innerHTML = '<p class="muted">Cargando texto…</p>';
+
+  try {
+    const res = await fetch(`${AAI}/transcript/${encodeURIComponent(entry.transcript_id)}`, {
+      headers: { Authorization: apiKey },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    entry.audio_duration = data.audio_duration || null;
+    entry.language_code = data.language_code || null;
+    entry.utterances = data.utterances || null;
+    entry.text = data.text || '';
+    entry.speakers = data.utterances ? [...new Set(data.utterances.map(u => u.speaker))] : [];
+    entry._loaded = true;
+    cacheTranscript(entry.transcript_id, data);
+
+    wrap.innerHTML = '';
+    wrap.appendChild(renderUtterances(entry));
+    card.querySelector('.history-row-meta').textContent = formatRowMeta(entry);
+    const integ = card.querySelector('.history-integrate');
+    integ.innerHTML = '';
+    integ.appendChild(renderIntegrate(entry));
+  } catch (err) {
+    wrap.innerHTML = `<p class="muted">No se pudo cargar: ${err.message}</p>`;
+    toast(`Error: ${err.message}`, 'error');
+  }
+}
+
+function deleteEntryRemote(entry) {
+  if (!confirm(`¿Borrar "${entry.filename}" de AssemblyAI?\n\nEsto la elimina permanentemente — dejará de estar accesible vía API. No se puede deshacer.`)) return;
+  const apiKey = getApiKey();
+  if (!apiKey) return;
+  fetch(`${AAI}/transcript/${encodeURIComponent(entry.transcript_id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: apiKey },
+  }).then(res => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    removeFilenameFor(entry.transcript_id);
+    removeCacheFor(entry.transcript_id);
+    refreshHistory();
+    toast('Transcripción borrada', 'success');
+  }).catch(err => {
+    toast(`No se pudo borrar: ${err.message}`, 'error');
+  });
+}
+
+function renderStatusBadge(node, status) {
+  if (!status) return;
+  if (status === 'completed') {
+    node.remove();
+    return;
+  }
+  node.classList.add(`status-${status}`);
+  node.textContent = status;
 }
 
 function renderUtterances(entry) {
@@ -536,7 +689,7 @@ function downloadEntryTxt(entry) {
   const blob = new Blob([formatPlainText(entry)], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const base = entry.filename.replace(/\.[^.]+$/, '');
+  const base = (entry.filename || 'transcripcion').replace(/\.[^.]+$/, '');
   a.href = url;
   a.download = `${base}-transcripcion.txt`;
   document.body.appendChild(a);
@@ -555,7 +708,7 @@ function formatPlainText(entry) {
 function formatRowMeta(entry) {
   const parts = [];
   if (entry.audio_duration) parts.push(formatDuration(entry.audio_duration));
-  if (entry.speakers.length) {
+  if (entry.speakers && entry.speakers.length) {
     parts.push(`${entry.speakers.length} ${entry.speakers.length === 1 ? 'hablante' : 'hablantes'}`);
   }
   if (entry.language_code) parts.push(entry.language_code);
@@ -563,7 +716,9 @@ function formatRowMeta(entry) {
   return parts.join(' · ');
 }
 function formatRelativeTime(iso) {
+  if (!iso) return '';
   const then = new Date(iso).getTime();
+  if (isNaN(then)) return '';
   const delta = (Date.now() - then) / 1000;
   if (delta < 60) return 'hace unos segundos';
   if (delta < 3600) return `hace ${Math.floor(delta / 60)} min`;
@@ -650,4 +805,4 @@ function pad(n) { return n.toString().padStart(2, '0'); }
 
 // Init
 refreshKeyUI();
-renderHistory();
+if (getApiKey()) refreshHistory();

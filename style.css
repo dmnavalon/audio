@@ -451,6 +451,31 @@ html, body {
   min-width: 0;
   flex: 1;
 }
+.history-status {
+  font-size: .7rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 600;
+  padding: .15rem .5rem;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--text-subtle);
+  flex-shrink: 0;
+}
+.history-status.status-processing,
+.history-status.status-queued {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.history-status.status-error {
+  background: var(--danger-soft, rgba(220, 38, 38, .12));
+  color: var(--danger);
+}
+.history-empty {
+  padding: 1.25rem;
+  text-align: center;
+  margin: 0;
+}
 .history-filename {
   font-size: .92rem;
   font-weight: 500;
